@@ -1,16 +1,17 @@
 from __future__ import annotations
+
 import json
-import os
-import socket
-import platform
 import logging
+import os
+import platform
+import socket
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from datetime import datetime, timezone
 from typing import Dict
 
-from flask import Flask, request, jsonify, g
+from flask import Flask, g, jsonify, request
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from pythonjsonlogger import jsonlogger
 
@@ -52,7 +53,6 @@ system_info_duration_seconds = Histogram(
 )
 
 
-# take parameters from environment variables with defaults
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "5000"))
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
@@ -65,7 +65,6 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 visits_lock = Lock()
 
 
-# ── JSON logger configuration ──────────────────────────────────────────────
 class CustomJsonFormatter(jsonlogger.JsonFormatter):
     """Extend the default JsonFormatter with fixed extra fields."""
 
@@ -74,7 +73,6 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
         log_record["timestamp"] = datetime.now(timezone.utc).isoformat()
         log_record["level"] = record.levelname
         log_record["logger"] = record.name
-        # drop duplicate/verbose keys added by the base class
         log_record.pop("color_message", None)
 
 
@@ -165,7 +163,7 @@ def load_runtime_config() -> Dict[str, object]:
         return merged
     return config
 
-# ── Request / response lifecycle hooks ─────────────────────────────────────
+
 @app.before_request
 def _before() -> None:
     g.endpoint = normalize_endpoint(request.path)
@@ -203,18 +201,15 @@ def _after(response):  # type: ignore[return]
 
 
 logger.info("Starting devops-info-service", extra={"host": HOST, "port": PORT, "debug": DEBUG})
-
-# additional startup info for diagnostics
 logger.debug("Environment variables", extra={"HOST": HOST, "PORT": PORT, "DEBUG": DEBUG, "PATH": os.getenv("PATH")})
 
-# save service start time
 START_TIME = datetime.now(timezone.utc)
 try:
     write_visits(read_visits())
 except OSError as exc:
     logger.warning("Failed to initialize visits file", extra={"path": str(VISITS_FILE), "error": str(exc)})
 
-# utility functions
+
 def get_system_info() -> Dict[str, object]:
     return {
         "hostname": socket.gethostname(),
@@ -224,6 +219,7 @@ def get_system_info() -> Dict[str, object]:
         "cpu_count": os.cpu_count() or 1,
         "python_version": platform.python_version(),
     }
+
 
 def get_uptime() -> Dict[str, object]:
     delta = datetime.now(timezone.utc) - START_TIME
@@ -235,6 +231,7 @@ def get_uptime() -> Dict[str, object]:
         "human": f"{hours} hours, {minutes} minutes",
     }
 
+
 def get_request_info() -> Dict[str, object]:
     xff = request.headers.get("X-Forwarded-For")
     client_ip = xff.split(",")[0].strip() if xff else request.remote_addr
@@ -245,7 +242,7 @@ def get_request_info() -> Dict[str, object]:
         "path": request.path,
     }
 
-# main endpoints for getting service info
+
 @app.route("/", methods=["GET"])
 def index():
     logger.info("Handling index request", extra={"path": request.path, "method": request.method})
@@ -256,9 +253,9 @@ def index():
 
     payload = {
         "service": {
-            "name" : APP_NAME,
+            "name": APP_NAME,
             "version": "1.0.0",
-            "description": "DevOps course info service"
+            "description": "DevOps course info service",
         },
         "configuration": runtime_config,
         "system": system_info,
@@ -282,7 +279,7 @@ def index():
     }
     return jsonify(payload)
 
-# health check endpoint
+
 @app.route("/health", methods=["GET"])
 def health():
     logger.info("Health check requested")
@@ -314,7 +311,7 @@ def visits():
 def metrics():
     return generate_latest(), 200, {"Content-Type": CONTENT_TYPE_LATEST}
 
-# error handlers
+
 @app.errorhandler(404)
 def not_found(_error):
     logger.warning("Not found", extra={"path": request.path, "method": request.method})
@@ -325,11 +322,12 @@ def not_found(_error):
 @app.errorhandler(500)
 def internal_error(_error):
     logger.exception("Internal server error", extra={"path": request.path, "method": request.method})
-    logger.debug("Exception detail", extra={"error": str(_error)})   
+    logger.debug("Exception detail", extra={"error": str(_error)})
     return (
         jsonify({"error": "Internal Server Error", "message": "An unexpected error occurred"}),
         500,
     )
+
 
 if __name__ == "__main__":
     app.run(host=HOST, port=PORT, debug=DEBUG)
